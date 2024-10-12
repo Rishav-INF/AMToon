@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/loginbg">
+
+
+    <TextView
+        android:id="@+id/textView2"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:fontFamily="@font/homenaje"
+        android:text="Create your account"
+        android:textColor="@color/white"
+        android:textSize="50sp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.494"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintVertical_bias="0.438" />
+
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/signupnamelay"
+        android:layout_width="267dp"
+        android:layout_height="57dp"
+        android:width="60sp"
+        android:inputType="text"
+        android:padding="5sp"
+        android:textSize="30sp"
+        app:helperText="Enter your name"
+        app:helperTextTextColor="@color/white"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.562"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintVertical_bias="0.635">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/signupnametext"
+            android:layout_width="227dp"
+            android:layout_height="41dp"
+            android:hint="UserName"
+            android:padding="1sp"
+            android:shadowColor="@color/white"
+            android:textColor="@color/white"
+            android:textColorHighlight="@color/white" />
+
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/signuppasswordlay"
+        android:layout_width="267dp"
+        android:layout_height="57dp"
+        android:layout_marginBottom="144dp"
+        android:width="60sp"
+        android:inputType="text"
+        android:padding="5sp"
+        android:textSize="30sp"
+        app:helperText="Enter your newly created Password"
+        app:helperTextTextColor="@color/white"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.562"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/signupnamelay"
+        app:layout_constraintVertical_bias="1.0">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/signuppasswordtext"
+            android:layout_width="227dp"
+            android:layout_height="41dp"
+            android:hint="Password"
+            android:padding="1sp"
+            android:textColor="@color/white" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <Button
+        android:id="@+id/signupcompletionbtn"
+        android:layout_width="150dp"
+        android:layout_height="35dp"
+        android:layout_marginBottom="60dp"
+        android:background="@drawable/border"
+        android:fontFamily="@font/homenaje"
+        android:text="SIGN UP"
+        android:textColor="@color/white"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.563"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/signuppasswordlay"
+        app:layout_constraintVertical_bias="0.775" />
+
+    <TextView
+        android:id="@+id/textView5"
+        android:layout_width="410dp"
+        android:layout_height="136dp"
+        android:gravity="center"
+        android:fontFamily="@font/livvic_thin"
+        android:text="AnimeMangaToon"
+        android:textColor="@color/white"
+        android:textSize="25dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.0"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintVertical_bias="0.0" />
+
+    <VideoView
+        android:id="@+id/video"
+        android:layout_width="385dp"
+        android:layout_height="125dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintVertical_bias="0.202" />
+
+
+</androidx.constraintlayout.widget.ConstraintLayout>

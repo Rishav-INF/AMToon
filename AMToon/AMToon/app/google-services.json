@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "276108721532",
+    "firebase_url": "https://amtoon-54b54-default-rtdb.firebaseio.com",
+    "project_id": "amtoon-54b54",
+    "storage_bucket": "amtoon-54b54.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:276108721532:android:51f6e4ba03aef12a9738f9",
+        "android_client_info": {
+          "package_name": "com.example.amtoon"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDE4XJaOJ7pYFSYyedWtnM_K8-uvxuxYNo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
