@@ -1,0 +1,484 @@
+Based on your schema and existing code, here's the complete implementation for **US 06 — Automated Billing Scheduler**.
+
+---
+
+## Implementation Plan
+
+You need:
+1. `BillingJobService` + `BillingJobServiceImpl`
+2. `InvoiceService` + `InvoiceServiceImpl` (core invoice generation)
+3. `BillingScheduler` (the `@Scheduled` trigger)
+4. `BillingJobController` (admin manual trigger + view logs)
+
+---
+
+### 1. `BillingJobService.java` (Interface)
+
+```java
+package com.infy.GenPay.service;
+
+import com.infy.GenPay.dto.BillingJobDTO;
+import java.util.List;
+import java.util.UUID;
+
+public interface BillingJobService {
+    BillingJobDTO runBillingJob();                    // called by scheduler
+    BillingJobDTO triggerManually();                 // called by admin
+    BillingJobDTO getBillingJob(UUID id);
+    List<BillingJobDTO> getAllJobs();
+}
+```
+
+---
+
+### 2. `BillingJobServiceImpl.java`
+
+```java
+package com.infy.GenPay.service.impl;
+
+import com.infy.GenPay.dto.BillingJobDTO;
+import com.infy.GenPay.entity.*;
+import com.infy.GenPay.exception.GenPayException;
+import com.infy.GenPay.repository.*;
+import com.infy.GenPay.service.BillingJobService;
+import com.infy.GenPay.service.InvoiceService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.*;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class BillingJobServiceImpl implements BillingJobService {
+
+    private final BillingJobRepository billingJobRepository;
+    private final SubscriptionRepository subscriptionRepository;
+    private final InvoiceService invoiceService;
+
+    @Override
+    @Transactional
+    public BillingJobDTO runBillingJob() {
+        LocalDate today = LocalDate.now();
+        log.info("Billing job started for date: {}", today);
+
+        // --- IDEMPOTENCY CHECK ---
+        // Don't run if a job already completed today
+        boolean alreadyRan = billingJobRepository
+            .existsByScheduledDateAndStatus(today, BillingJob.Status.COMPLETED);
+        if (alreadyRan) {
+            log.warn("Billing job already completed for {}. Skipping.", today);
+            throw new GenPayException("Billing job already ran for today.");
+        }
+
+        // Create billing job record
+        BillingJob job = new BillingJob();
+        job.setScheduledDate(today);
+        job.setStatus(BillingJob.Status.RUNNING);
+        job.setStartedAt(LocalDateTime.now());
+        job.setSubscriptionsProcessed(0);
+        job.setInvoicesGenerated(0);
+        job.setTotalAmount(BigDecimal.ZERO);
+        billingJobRepository.save(job);
+
+        int processed = 0;
+        int invoicesGenerated = 0;
+        BigDecimal totalAmount = BigDecimal.ZERO;
+        StringBuilder errorLog = new StringBuilder();
+
+        // --- FETCH DUE SUBSCRIPTIONS ---
+        // Only ACTIVE subscriptions whose next_billing_date is today
+        List<Subscription> dueSubscriptions = subscriptionRepository
+            .findByNextBillingDateAndStatusIn(
+                today,
+                List.of(Subscription.Status.ACTIVE)
+                // SUSPENDED and CANCELLED are excluded per acceptance criteria
+            );
+
+        log.info("Found {} subscriptions due for billing.", dueSubscriptions.size());
+
+        for (Subscription subscription : dueSubscriptions) {
+            try {
+                // --- GENERATE INVOICE (with tax & discount) ---
+                Invoice invoice = invoiceService
+                    .generateInvoice(subscription, job);
+
+                totalAmount = totalAmount.add(invoice.getTotalAmount());
+                invoicesGenerated++;
+
+                // --- UPDATE NEXT BILLING DATE ---
+                subscription.setNextBillingDate(
+                    calculateNextBillingDate(subscription)
+                );
+                subscription.setCurrentMrr(invoice.getSubtotal());
+                subscriptionRepository.save(subscription);
+
+                processed++;
+
+            } catch (Exception e) {
+                log.error("Failed to bill subscription {}: {}",
+                    subscription.getId(), e.getMessage());
+                errorLog.append("SUB ")
+                    .append(subscription.getId())
+                    .append(": ")
+                    .append(e.getMessage())
+                    .append("\n");
+            }
+        }
+
+        // --- FINALIZE JOB ---
+        job.setStatus(errorLog.isEmpty()
+            ? BillingJob.Status.COMPLETED
+            : BillingJob.Status.FAILED);
+        job.setCompletedAt(LocalDateTime.now());
+        job.setSubscriptionsProcessed(processed);
+        job.setInvoicesGenerated(invoicesGenerated);
+        job.setTotalAmount(totalAmount);
+        if (!errorLog.isEmpty()) {
+            job.setErrorLog(errorLog.toString());
+        }
+        billingJobRepository.save(job);
+
+        log.info("Billing job finished. Processed: {}, Invoices: {}, Total: {}",
+            processed, invoicesGenerated, totalAmount);
+
+        return mapToDTO(job);
+    }
+
+    @Override
+    public BillingJobDTO triggerManually() {
+        return runBillingJob(); // same logic, just called from controller
+    }
+
+    @Override
+    public BillingJobDTO getBillingJob(UUID id) {
+        return billingJobRepository.findById(id)
+            .map(this::mapToDTO)
+            .orElseThrow(() -> new GenPayException("Billing job not found: " + id));
+    }
+
+    @Override
+    public List<BillingJobDTO> getAllJobs() {
+        return billingJobRepository.findAllByOrderByScheduledDateDesc()
+            .stream().map(this::mapToDTO).toList();
+    }
+
+    // --- HELPERS ---
+
+    private LocalDate calculateNextBillingDate(Subscription sub) {
+        LocalDate current = sub.getNextBillingDate();
+        return switch (sub.getBillingCycle()) {
+            case MONTHLY   -> current.plusMonths(1);
+            case QUARTERLY -> current.plusMonths(3);
+            case ANNUAL    -> current.plusYears(1);
+            case USAGE_BASED, PER_SEAT -> current.plusMonths(1); // default monthly
+            default        -> current.plusMonths(1);
+        };
+    }
+
+    private BillingJobDTO mapToDTO(BillingJob job) {
+        BillingJobDTO dto = new BillingJobDTO();
+        dto.setId(job.getId());
+        dto.setScheduledDate(job.getScheduledDate());
+        dto.setStatus(job.getStatus().name());
+        dto.setStartedAt(job.getStartedAt());
+        dto.setCompletedAt(job.getCompletedAt());
+        dto.setSubscriptionsProcessed(job.getSubscriptionsProcessed());
+        dto.setInvoicesGenerated(job.getInvoicesGenerated());
+        dto.setTotalAmount(job.getTotalAmount());
+        dto.setErrorLog(job.getErrorLog());
+        return dto;
+    }
+}
+```
+
+---
+
+### 3. `InvoiceServiceImpl.java` (core generation logic)
+
+```java
+package com.infy.GenPay.service.impl;
+
+import com.infy.GenPay.entity.*;
+import com.infy.GenPay.repository.*;
+import com.infy.GenPay.service.InvoiceService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
+
+@Service
+@RequiredArgsConstructor
+public class InvoiceServiceImpl implements InvoiceService {
+
+    private final InvoiceRepository invoiceRepository;
+    private final InvoiceLineItemRepository lineItemRepository;
+    private final SubscriptionAddonRepository addonRepository;
+    private final SubscriptionDiscountRepository subDiscountRepository;
+    private final TaxRuleRepository taxRuleRepository;
+
+    @Override
+    @Transactional
+    public Invoice generateInvoice(Subscription subscription,
+                                   BillingJob job) {
+
+        // --- IDEMPOTENCY: skip if invoice already exists for this
+        //     subscription + billing period ---
+        boolean exists = invoiceRepository
+            .existsBySubscriptionIdAndBillingJobId(
+                subscription.getId(), job.getId());
+        if (exists) {
+            return invoiceRepository
+                .findBySubscriptionIdAndBillingJobId(
+                    subscription.getId(), job.getId());
+        }
+
+        Plan plan = subscription.getPlan();
+        Customer customer = subscription.getCustomer();
+
+        // --- BUILD INVOICE ---
+        Invoice invoice = new Invoice();
+        invoice.setSubscription(subscription);
+        invoice.setBillingJob(job);
+        invoice.setInvoiceNumber(generateInvoiceNumber());
+        invoice.setIssueDate(LocalDate.now());
+        invoice.setDueDate(LocalDate.now().plusDays(7)); // net-7
+        invoice.setStatus(Invoice.Status.DRAFT);
+
+        // 1. Base plan price
+        BigDecimal subtotal = plan.getBasePrice()
+            .multiply(BigDecimal.valueOf(subscription.getQuantity()));
+
+        // Line item: base plan
+        InvoiceLineItem planLine = new InvoiceLineItem();
+        planLine.setInvoice(invoice);
+        planLine.setDescription(plan.getName() + " Plan");
+        planLine.setQuantity(subscription.getQuantity());
+        planLine.setUnitPrice(plan.getBasePrice());
+        planLine.setLineTotal(subtotal);
+
+        // 2. Add-ons
+        List<SubscriptionAddon> addons = addonRepository
+            .findBySubscriptionId(subscription.getId());
+        BigDecimal addonTotal = BigDecimal.ZERO;
+        for (SubscriptionAddon addon : addons) {
+            BigDecimal lineTotal = addon.getPrice()
+                .multiply(BigDecimal.valueOf(addon.getQuantity()));
+            addonTotal = addonTotal.add(lineTotal);
+
+            InvoiceLineItem addonLine = new InvoiceLineItem();
+            addonLine.setInvoice(invoice);
+            addonLine.setDescription(addon.getAddonName());
+            addonLine.setQuantity(addon.getQuantity());
+            addonLine.setUnitPrice(addon.getPrice());
+            addonLine.setLineTotal(lineTotal);
+            lineItemRepository.save(addonLine);
+        }
+        subtotal = subtotal.add(addonTotal);
+
+        // 3. Apply discount (if any active discount on this subscription)
+        BigDecimal discountAmount = BigDecimal.ZERO;
+        List<SubscriptionDiscount> discounts = subDiscountRepository
+            .findActiveBySubscriptionId(
+                subscription.getId(), LocalDate.now());
+        for (SubscriptionDiscount sd : discounts) {
+            Discount d = sd.getDiscount();
+            if (d.getDiscountType() == Discount.Type.PERCENTAGE) {
+                discountAmount = discountAmount.add(
+                    subtotal.multiply(d.getValue())
+                        .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP)
+                );
+            } else { // FLAT
+                discountAmount = discountAmount.add(d.getValue());
+            }
+        }
+        // Discount cannot exceed subtotal
+        discountAmount = discountAmount.min(subtotal);
+
+        // 4. Apply tax
+        BigDecimal taxableAmount = subtotal.subtract(discountAmount);
+        BigDecimal taxAmount = BigDecimal.ZERO;
+        TaxRule taxRule = taxRuleRepository
+            .findActiveByRegion(customer.getRegion()); // customer must have region
+        if (taxRule != null && taxRule.isActive()) {
+            taxAmount = taxableAmount
+                .multiply(taxRule.getRate())
+                .setScale(2, RoundingMode.HALF_UP);
+
+            InvoiceLineItem taxLine = new InvoiceLineItem();
+            taxLine.setInvoice(invoice);
+            taxLine.setDescription("Tax (" + taxRule.getName()
+                + " " + taxRule.getRate().multiply(
+                    BigDecimal.valueOf(100)) + "%)");
+            taxLine.setQuantity(1);
+            taxLine.setUnitPrice(taxAmount);
+            taxLine.setLineTotal(taxAmount);
+            lineItemRepository.save(taxLine);
+        }
+
+        // 5. Final totals
+        BigDecimal totalAmount = taxableAmount.add(taxAmount);
+
+        invoice.setSubtotal(subtotal);
+        invoice.setDiscountAmount(discountAmount);
+        invoice.setTaxAmount(taxAmount);
+        invoice.setTotalAmount(totalAmount);
+
+        invoiceRepository.save(invoice);
+        lineItemRepository.save(planLine);
+
+        return invoice;
+    }
+
+    private String generateInvoiceNumber() {
+        // Format: INV-YYYYMM-XXXXX
+        String datePart = LocalDate.now().toString().substring(0, 7)
+            .replace("-", "");
+        String random = String.valueOf((int)(Math.random() * 90000) + 10000);
+        return "INV-" + datePart + "-" + random;
+    }
+}
+```
+
+---
+
+### 4. `BillingScheduler.java`
+
+```java
+package com.infy.GenPay.scheduler;
+
+import com.infy.GenPay.service.BillingJobService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+@Component
+@EnableScheduling
+@RequiredArgsConstructor
+@Slf4j
+public class BillingScheduler {
+
+    private final BillingJobService billingJobService;
+
+    // Runs every day at midnight
+    @Scheduled(cron = "0 0 0 * * *")
+    public void runDailyBilling() {
+        log.info("=== Daily Billing Scheduler Triggered ===");
+        try {
+            billingJobService.runBillingJob();
+        } catch (Exception e) {
+            // Catch here so scheduler thread doesn't die on error
+            log.error("Billing scheduler failed: {}", e.getMessage());
+        }
+    }
+}
+```
+
+---
+
+### 5. `BillingJobController.java`
+
+```java
+package com.infy.GenPay.controller;
+
+import com.infy.GenPay.dto.BillingJobDTO;
+import com.infy.GenPay.service.BillingJobService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.UUID;
+
+@RestController
+@RequestMapping("/api/billing-jobs")
+@RequiredArgsConstructor
+public class BillingJobController {
+
+    private final BillingJobService billingJobService;
+
+    // Admin manually triggers billing (e.g. for testing or recovery)
+    @PostMapping("/trigger")
+    public ResponseEntity<BillingJobDTO> triggerBilling() {
+        return ResponseEntity.ok(billingJobService.triggerManually());
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<BillingJobDTO> getJob(@PathVariable UUID id) {
+        return ResponseEntity.ok(billingJobService.getBillingJob(id));
+    }
+
+    @GetMapping
+    public ResponseEntity<List<BillingJobDTO>> getAllJobs() {
+        return ResponseEntity.ok(billingJobService.getAllJobs());
+    }
+}
+```
+
+---
+
+### 6. Repository methods you need to add
+
+```java
+// SubscriptionRepository
+List<Subscription> findByNextBillingDateAndStatusIn(
+    LocalDate date, List<Subscription.Status> statuses);
+
+// BillingJobRepository
+boolean existsByScheduledDateAndStatus(
+    LocalDate date, BillingJob.Status status);
+
+List<BillingJob> findAllByOrderByScheduledDateDesc();
+
+// InvoiceRepository
+boolean existsBySubscriptionIdAndBillingJobId(UUID subId, UUID jobId);
+Invoice findBySubscriptionIdAndBillingJobId(UUID subId, UUID jobId);
+
+// SubscriptionDiscountRepository
+@Query("SELECT sd FROM SubscriptionDiscount sd WHERE " +
+       "sd.subscription.id = :subId AND " +
+       "sd.discount.isActive = true AND " +
+       "sd.discount.validFrom <= :today AND " +
+       "(sd.discount.validUntil IS NULL OR sd.discount.validUntil >= :today)")
+List<SubscriptionDiscount> findActiveBySubscriptionId(
+    UUID subId, LocalDate today);
+
+// TaxRuleRepository
+@Query("SELECT t FROM TaxRule t WHERE t.region = :region AND t.isActive = true")
+TaxRule findActiveByRegion(String region);
+```
+
+---
+
+### 7. `application.properties` — enable scheduling
+
+```properties
+spring.task.scheduling.enabled=true
+```
+
+---
+
+### Acceptance Criteria Coverage
+
+| Criteria | How Covered |
+|---|---|
+| Daily scheduler run | `@Scheduled(cron = "0 0 0 * * *")` in `BillingScheduler` |
+| Bills subscriptions due today | `findByNextBillingDateAndStatusIn(today, ACTIVE)` |
+| Idempotent invoice generation | Check `existsBySubscriptionIdAndBillingJobId` before creating |
+| Skip Suspended/Cancelled | Only `ACTIVE` passed to repository query |
+| Apply tax & discount rules | Done in `InvoiceServiceImpl` steps 3 & 4 |
+| Update next billing date | Calculated by `calculateNextBillingDate()` after success |
+| Log billing summary | `BillingJob` record updated with counts, total, errors |
